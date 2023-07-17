@@ -1,0 +1,455 @@
+---
+title: "AJ Receiving Trailer Level Hours Linear Model Analysis<img src=\"CT-Brandmark-Standard.png\" style=\"float: right;\"/>"
+#title: "AJ Receiving Trailer Level Hours Linear Model Analysis"
+author: "Yomi Ojutalayo <br/> Tech and Projects, Data Analytics"
+date: "2023-06-28"
+output:
+  html_document:
+    code_folding: none
+    df_print: paged
+    highlight: tango
+    number_sections: yes
+    theme: flatly
+    toc: yes
+    toc_depth: 2
+  pdf_document :
+    toc: yes
+    toc_depth: '2'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  #echo    = TRUE,      #include code
+  message = FALSE,
+  warning = FALSE,
+  #results = "hide",     #suppresses r-console output
+  out.width = "100%",
+  out.height = "500px",
+  fig.pos = "center",
+  dpi = 300
+  )
+
+```
+
+
+
+```{r, include=FALSE, out.width="25%", out.height="100px"}
+
+
+
+
+htmltools::img(src = knitr::image_uri("../AJ Receiver Demand/img/CT-Brandmark-Standard.png"),
+               alt = 'logo',
+               style = 'position:absolute; top:0; right:0; padding:10px;')
+
+
+
+
+# 
+#  htmltools::img(src = knitr::image_uri(file.path(R.home("doc"), "html", "logo.jpg")), 
+#                alt = 'logo', 
+#                style = 'position:absolute; top:0; right:0; padding:50px;')
+
+
+
+
+
+```
+
+
+# Summary {.tabset .tabset-fade .tabset-pills}
+
+1. Business Problem: AJ Operations would like to predict total hours to complete a trailer on a shift by shift basis
+2. Goal: Generate work content (Actual Hours) through predictive modeling leveraging 1yr of historical LM data.
+3. Independent variables that were considered in the models were: Std Time, Onstd Time, Cube, Cartons, Pallet, Lines, Cube per Hour, Cartons per hour, Pallet per hour and lines per hour.
+4. Receiving Operations can apply these models for estimating trailer completion times for offshore and domestic SKUs on a shift by shift basis by leveraging: cube, lines, pallets and cartons as lagging indicators for inputs into the model to determine staffing requirements
+
+
+
+```{r, include=FALSE}
+interactive <- TRUE     #turn to false in order to knit in pdf
+
+```
+
+
+
+```{r, libraries, include=FALSE}
+
+library(tidymodels)
+library(tidyverse) 
+library(lubridate)
+library(timetk)
+library(skimr)
+library(forecast)  #use tsclean
+library(janitor)   #use clean names
+
+```
+
+# Load Receiving Data
+
+```{r, eval=TRUE, echo=FALSE}
+
+recv_trailer_dtls <-read.csv(file.choose(), header=T) %>% tibble()  # Receiving dept daily trailer details
+
+
+recv_trailer_dtls <- recv_trailer_dtls %>% tibble() %>%
+  mutate(DATE         = ymd(DATE),
+         DEPT_WORKED  = as_factor(DEPT_WORKED),
+         CORE_PROCESS = as_factor(CORE_PROCESS),
+         SKU_CLASS    = as_factor(SKU_CLASS)
+         )
+
+
+recv_trailer_dtls 
+
+```
+
+# Exploratory Time Series Analysis 
+
+## Domestic SKUs Plot
+
+```{r, Domestic Plots, echo=FALSE}
+
+recv_trailer_dtls %>% 
+  filter(SKU_CLASS == "DOMESTIC") %>%
+  plot_time_series(DATE, ACTUAL_TIME, .title="Domestic Actual Hours Time Series Plot") 
+
+recv_trailer_dtls %>%
+  filter(SKU_CLASS == "DOMESTIC") %>%
+  plot_time_series(DATE, CUBE, .title="Domestic Cube Time Series Plot") 
+
+
+recv_trailer_dtls %>% 
+  filter(SKU_CLASS == "DOMESTIC") %>%
+  plot_time_series(DATE, CARTONS, .title="Domestic Cartons Time Series Plot")
+
+
+recv_trailer_dtls %>%
+  filter(SKU_CLASS == "DOMESTIC") %>%
+  drop_na() %>%
+  plot_time_series(DATE, PALLET, .title="Domestic Pallet Time Series Plot")
+
+
+recv_trailer_dtls %>%
+  filter(SKU_CLASS == "DOMESTIC") %>%
+  drop_na() %>%
+  plot_time_series(DATE, LINES, .title="Domestic Lines Time Series Plot")
+
+
+recv_trailer_dtls %>% 
+  filter(SKU_CLASS == "DOMESTIC") %>%
+  plot_time_series(DATE, STD_TIME, .title="Domestic STD Hours Time Series Plot")
+
+
+recv_trailer_dtls %>% 
+  filter(SKU_CLASS == "DOMESTIC") %>%
+  plot_time_series(DATE, ONSTD_TIME, .title="Domestic ONSTD Hours Time Series Plot")
+
+
+```
+
+
+## Offshore SKUs
+
+```{r, Offshore Plots, echo=FALSE}
+
+recv_trailer_dtls %>% 
+  filter(SKU_CLASS == "OFFSHORE") %>%
+  plot_time_series(DATE, ACTUAL_TIME, .title="Offshore Actual Hours Time Series Plot") 
+
+recv_trailer_dtls %>%
+  filter(SKU_CLASS == "OFFSHORE") %>%
+  plot_time_series(DATE, CUBE, .title="Offshore Cube Time Series Plot") 
+
+
+recv_trailer_dtls %>% 
+  filter(SKU_CLASS == "OFFSHORE") %>%
+  plot_time_series(DATE, CARTONS, .title="Offshore Cartons Time Series Plot")
+
+
+recv_trailer_dtls %>%
+  filter(SKU_CLASS == "OFFSHORE") %>%
+  plot_time_series(DATE, PALLET, .title="Offshore Pallet Time Series Plot")
+
+
+recv_trailer_dtls %>%
+  filter(SKU_CLASS == "OFFSHORE") %>%
+  plot_time_series(DATE, LINES, .title="Offshore Lines Time Series Plot")
+
+
+recv_trailer_dtls %>% 
+  filter(SKU_CLASS == "OFFSHORE") %>%
+  plot_time_series(DATE, STD_TIME, .title="Offshore STD Hours Time Series Plot")
+
+recv_trailer_dtls %>% 
+  filter(SKU_CLASS == "OFFSHORE") %>%
+  plot_time_series(DATE, ONSTD_TIME, .title="OFFSHORE ONSTD Hours Time Series Plot")
+
+
+```
+
+
+## Correlation Matrix
+### Domestic Correlation matrix
+
+```{r, DOmestic Corr, echo=FALSE}
+
+recv_domestic_trailer_dtls_corr_table <- recv_trailer_dtls %>%
+  filter(SKU_CLASS == "DOMESTIC") %>%
+  select (-c(WHSE:TRAILER_NUM), -TRAILER_CHURN) %>%
+  #mutate(SKU_CLASS = ifelse(SKU_CLASS == "DOMESTIC", 1, 0)) %>%
+  drop_na()%>%
+  cor() %>%
+  as.data.frame() %>%
+  rownames_to_column() %>%
+  as_tibble() %>%
+  select(rowname, ACTUAL_TIME) %>%
+  arrange(desc(ACTUAL_TIME))
+
+
+recv_domestic_trailer_dtls_corr_table
+
+```
+
+### Offshore Correlation matrix
+
+```{r, Offshore Corr, echo=FALSE}
+
+recv_offshore_trailer_dtls_corr_table <- recv_trailer_dtls %>%
+  filter(SKU_CLASS == "OFFSHORE") %>%
+  select (-c(WHSE:TRAILER_NUM), -TRAILER_CHURN) %>%
+  #mutate(SKU_CLASS = ifelse(SKU_CLASS == "DOMESTIC", 1, 0)) %>%
+  drop_na()%>%
+  cor() %>%
+  as.data.frame() %>%
+  rownames_to_column() %>%
+  as_tibble() %>%
+  select(rowname, ACTUAL_TIME) %>%
+  arrange(desc(ACTUAL_TIME))
+
+
+recv_offshore_trailer_dtls_corr_table
+
+```
+
+# Machine Learning
+
+## Data Preparation
+
+### Domestic Data
+
+```{r, Domestic Data Prep, echo=FALSE}
+
+
+recv_domestic_trailer_dtls_data_prep <- recv_trailer_dtls %>%
+  filter(SKU_CLASS == "DOMESTIC") %>%
+  drop_na() %>%
+  select (-c(WHSE:TRAILER_NUM), -TRAILER_CHURN) %>%
+  rowid_to_column()
+
+recv_domestic_trailer_dtls_data_prep
+
+
+```
+
+### Offshore Data
+
+```{r, Offshore Data Prep, echo=FALSE}
+
+recv_offshore_trailer_dtls_data_prep <- recv_trailer_dtls %>%
+  filter(SKU_CLASS == "OFFSHORE") %>%
+  drop_na() %>%
+  select (-c(WHSE:TRAILER_NUM), -TRAILER_CHURN) %>%
+  rowid_to_column()
+
+
+recv_offshore_trailer_dtls_data_prep 
+
+```
+
+## Resample
+
+### Domestic Resample
+
+```{r, domestic resample, echo=FALSE}
+
+set.seed(123)
+
+#recv_domestic_trailer_dtls_data_prep %>% summary()
+
+recv_domestic_trailer_dtls_splits <- initial_split(recv_domestic_trailer_dtls_data_prep, prop = 0.80)
+
+recv_domestic_trailer_dtls_splits
+
+training(recv_domestic_trailer_dtls_splits) %>% glimpse()
+
+
+```
+
+### Offshore Resample
+
+```{r, Offshore resample, echo=FALSE}
+
+
+recv_offshore_trailer_dtls_splits <- initial_split(recv_offshore_trailer_dtls_data_prep, prop = 0.80)
+
+recv_offshore_trailer_dtls_splits
+
+training(recv_offshore_trailer_dtls_splits) %>% glimpse()
+
+
+```
+
+## Machine Learning Create Models
+
+### Domestic ML
+
+#### Domestic Recipe
+```{r, Domestic recipe, echo=FALSE}
+
+recv_domestic_trailer_dtls_recipe_spec_1 <- recipe(ACTUAL_TIME ~ ., data = training(recv_domestic_trailer_dtls_splits)%>%
+                                        select(-rowid, -INDIRECT_TIME, -WEIGHT, -EFF, -WEIGHT_PH, -TRAILER_PH,
+                                               -CUBE_PER_LINE, -CUBE_PER_TRAILER)) 
+
+
+recv_domestic_trailer_dtls_recipe_spec_1 %>% prep() %>% juice() %>% glimpse()
+
+```
+
+#### Domestic Workflow XGBoost Model
+
+```{r, Domestic workflow XGBoost, echo=FALSE}
+
+recv_domestic_trailer_dtls_wflw_fit_11 <- workflow() %>%
+  add_model(
+    boost_tree(mode = "regression", learn_rate = 0.35) %>% set_engine("xgboost")
+  ) %>%
+  add_recipe(recv_domestic_trailer_dtls_recipe_spec_1) %>%
+  fit(training(recv_domestic_trailer_dtls_splits))
+
+recv_domestic_trailer_dtls_wflw_fit_11
+
+```
+
+
+
+#### Domestic Workflow Linear Model 
+
+```{r, Domestic workflow Linear Model, echo=FALSE}
+
+recv_domestic_trailer_dtls_wflw_fit_12 <- workflow() %>%
+  add_model(
+    linear_reg() %>%
+      set_engine("lm")
+  ) %>%
+  add_recipe(recv_domestic_trailer_dtls_recipe_spec_1) %>%
+  fit(training(recv_domestic_trailer_dtls_splits)) 
+
+recv_domestic_trailer_dtls_wflw_fit_12 
+
+```
+
+### Offshore ML
+
+#### Offshore Recipe
+
+```{r, offshore recipe, echo=FALSE}
+
+recv_offshore_trailer_dtls_recipe_spec_1 <- recipe(ACTUAL_TIME ~ ., data = training(recv_offshore_trailer_dtls_splits)%>%
+                                                     select(-rowid, -INDIRECT_TIME, -WEIGHT, -EFF, -WEIGHT_PH, -TRAILER_PH,
+                                                            -CUBE_PER_LINE, -CUBE_PER_TRAILER)) 
+
+recv_offshore_trailer_dtls_recipe_spec_1 %>% prep() %>% juice() %>% glimpse()
+
+```
+
+
+#### Offshore XGBoost Model
+
+```{r, offshore workflow XGBoost, echo=FALSE, results="hide"}
+
+recv_offshore_trailer_dtls_wflw_fit_21 <- workflow() %>%
+  add_model(
+    boost_tree(mode = "regression", learn_rate = 0.35) %>% set_engine("xgboost")
+  ) %>%
+  add_recipe(recv_offshore_trailer_dtls_recipe_spec_1) %>%
+  fit(training(recv_offshore_trailer_dtls_splits))
+
+recv_offshore_trailer_dtls_wflw_fit_21
+
+```
+
+#### Offshore Linear Model
+
+```{r, offshore Linear model, echo=FALSE}
+
+recv_offshore_trailer_dtls_wflw_fit_22 <- workflow() %>%
+  add_model(
+    linear_reg() %>%
+      set_engine("lm")
+  ) %>%
+  add_recipe(recv_offshore_trailer_dtls_recipe_spec_1) %>%
+  fit(training(recv_offshore_trailer_dtls_splits)) 
+
+
+recv_offshore_trailer_dtls_wflw_fit_22
+
+```
+
+# Model Accuracy
+
+## Domestic XGBOOST Model
+
+```{r, echo=FALSE}
+
+recv_domestic_trailer_dtls_wflw_fit_11 %>%
+  predict(testing(recv_domestic_trailer_dtls_splits)) %>%
+  bind_cols(testing(recv_domestic_trailer_dtls_splits) %>% select(ACTUAL_TIME)) %>% 
+  metric_set(rmse, rsq)(ACTUAL_TIME, .pred)
+
+```
+
+
+## Domestic Linear Model
+
+```{r, echo=FALSE}
+
+recv_domestic_trailer_dtls_wflw_fit_12 %>%
+  predict(testing(recv_domestic_trailer_dtls_splits)) %>%
+  bind_cols(testing(recv_domestic_trailer_dtls_splits) %>% select(ACTUAL_TIME)) %>% 
+  metric_set(rmse, rsq)(ACTUAL_TIME, .pred)
+
+```
+
+## Offshore XGBOOST Model
+
+```{r, echo=FALSE}
+
+recv_offshore_trailer_dtls_wflw_fit_21 %>%
+  predict(testing(recv_domestic_trailer_dtls_splits)) %>%
+  bind_cols(testing(recv_domestic_trailer_dtls_splits) %>% select(ACTUAL_TIME)) %>% 
+  metric_set(rmse, rsq)(ACTUAL_TIME, .pred)
+
+```
+
+
+## Offshore Linear Model
+
+```{r, echo=FALSE}
+
+recv_offshore_trailer_dtls_wflw_fit_22 %>%
+  predict(testing(recv_domestic_trailer_dtls_splits)) %>%
+  bind_cols(testing(recv_domestic_trailer_dtls_splits) %>% select(ACTUAL_TIME)) %>% 
+  metric_set(rmse, rsq)(ACTUAL_TIME, .pred)
+
+
+```
+
+# Conclusion
+
+Both Linear Models have very high prediction accuracy of 99% for Offshore and Domestic SKUs respectively. Receiving Operations can apply these models to determine staffing requirements for offshore and domestic skus/trailers on a shift by shift basis.
+
+# Next Steps
+
+1. Develop Receiving WAB Tool for offshore and domestic trailers respectively. \
+2. As part of deployment of the Receiving WAB Tool, there needs to be a report created that captures/reflects all the lagging indicators by shift. This report would be leveraged to extract the inputs into the Receiving WAB Tool for planning staff requirements and compare plan vs actual.
