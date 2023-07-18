@@ -9,6 +9,8 @@ output:
     df_print: paged
     highlight: tango
     number_sections: yes
+    self_contained: yes
+    mode: selfcontained
     theme: flatly
     toc: yes
     toc_depth: 2
